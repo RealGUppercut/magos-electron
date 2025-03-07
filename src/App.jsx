@@ -3,32 +3,37 @@ import { useState } from "react";
 function App() {
   const [operations, setOperations] = useState([]);
 
+  // list of supported image extensions for previews
   const imageExtensions = ["jpg", "jpeg", "png", "gif", "bmp", "webp"];
 
+  // adds a new operation for file renaming/moving
   const addOperation = () => {
     setOperations((prev) => [
       ...prev,
       {
-        id: Date.now(),
-        files: [],
-        newNames: {},
-        destination: "",
-        previewVisibility: {},
-        expanded: true,
+        id: Date.now(), // unique id for each operation
+        files: [], // holds selected files
+        newNames: {}, // stores updated filenames
+        destination: "", // folder where files will be moved
+        previewVisibility: {}, // image preview toggling
+        expanded: true, // whether the operation window is open or collapsed
       },
     ]);
   };
 
+  // toggles the expanded/collapsed state of an operation window
   const toggleOperation = (id) => {
     setOperations((prev) =>
       prev.map((op) => (op.id === id ? { ...op, expanded: !op.expanded } : op))
     );
   };
 
+  // removes an entire operation window
   const removeOperation = (id) => {
     setOperations((prev) => prev.filter((op) => op.id !== id));
   };
 
+  // lets the user select files and updates state
   const selectFiles = async (id) => {
     const selectedFiles = await window.electron.selectFiles();
     if (selectedFiles && Array.isArray(selectedFiles)) {
@@ -50,13 +55,14 @@ function App() {
                     nameWithoutExt,
                   };
                 }),
-                newNames: selectedFiles.reduce((acc, filePath, index) => {
+                // prefills new names to match the original names
+                newNames: selectedFiles.reduce((acc, filePath) => {
                   const extension = filePath.split(".").pop().toLowerCase();
                   const nameWithoutExt = filePath
                     .split("/")
                     .pop()
                     .replace(/\.[^/.]+$/, "");
-                  acc[index] = `${nameWithoutExt}.${extension}`;
+                  acc[filePath] = `${nameWithoutExt}.${extension}`;
                   return acc;
                 }, {}),
                 previewVisibility: {},
@@ -67,6 +73,7 @@ function App() {
     }
   };
 
+  // select a destination folder
   const selectFolder = async (id) => {
     const selectedFolder = await window.electron.selectFolder();
     setOperations((prev) =>
@@ -76,7 +83,8 @@ function App() {
     );
   };
 
-  const handleNewNameChange = (opId, index, newName) => {
+  // updates the new filename when edited
+  const handleNewNameChange = (opId, filePath, newName) => {
     setOperations((prev) =>
       prev.map((op) =>
         op.id === opId
@@ -84,8 +92,9 @@ function App() {
               ...op,
               newNames: {
                 ...op.newNames,
-                [index]: `${newName.replace(/\.[^/.]+$/, "")}.${
-                  op.files[index].extension
+                [filePath]: `${newName.replace(/\.[^/.]+$/, "")}.${
+                  op.files.find((f) => f.originalPath === filePath)
+                    ?.extension || ""
                 }`,
               },
             }
@@ -94,11 +103,13 @@ function App() {
     );
   };
 
-  const handleNameClick = (e, op, index) => {
-    e.target.setSelectionRange(0, op.files[index].nameWithoutExt.length);
+  // highlights just the name in the filename input field when clicked
+  const handleNameClick = (e, file) => {
+    e.target.setSelectionRange(0, file.nameWithoutExt.length);
   };
 
-  const togglePreview = (opId, index) => {
+  // toggles image preview on
+  const togglePreview = (opId, filePath) => {
     setOperations((prev) =>
       prev.map((op) =>
         op.id === opId
@@ -106,7 +117,7 @@ function App() {
               ...op,
               previewVisibility: {
                 ...op.previewVisibility,
-                [index]: true,
+                [filePath]: true,
               },
             }
           : op
@@ -114,7 +125,8 @@ function App() {
     );
   };
 
-  const closePreview = (opId, index) => {
+  // toggles image preview off
+  const closePreview = (opId, filePath) => {
     setOperations((prev) =>
       prev.map((op) =>
         op.id === opId
@@ -122,7 +134,7 @@ function App() {
               ...op,
               previewVisibility: {
                 ...op.previewVisibility,
-                [index]: false,
+                [filePath]: false,
               },
             }
           : op
@@ -130,54 +142,36 @@ function App() {
     );
   };
 
-  const removeFile = (opId, index) => {
-    setOperations((prev) =>
-      prev.map((op) =>
-        op.id === opId
-          ? {
+  // removes a single file from an operation window
+  const removeFile = (opId, filePath) => {
+    setOperations(
+      (prev) =>
+        prev
+          .map((op) => {
+            if (op.id !== opId) return op;
+
+            // remove the file from the files list
+            const updatedFiles = op.files.filter(
+              (file) => file.originalPath !== filePath
+            );
+
+            // remove the corresponding new name
+            const updatedNewNames = { ...op.newNames };
+            delete updatedNewNames[filePath];
+
+            // remove the corresponding preview state
+            const updatedPreviewVisibility = { ...op.previewVisibility };
+            delete updatedPreviewVisibility[filePath];
+
+            return {
               ...op,
-              files: op.files.filter((_, i) => i !== index),
-              newNames: Object.fromEntries(
-                Object.entries(op.newNames).filter(
-                  ([key]) => key !== index.toString()
-                )
-              ),
-              previewVisibility: Object.fromEntries(
-                Object.entries(op.previewVisibility).filter(
-                  ([key]) => key !== index.toString()
-                )
-              ),
-            }
-          : op
-      )
+              files: updatedFiles,
+              newNames: updatedNewNames,
+              previewVisibility: updatedPreviewVisibility,
+            };
+          })
+          .filter((op) => op.files.length > 0) // remove the operation if no files are left
     );
-  };
-
-  const applyAllOperations = async () => {
-    const allResults = await Promise.all(
-      operations.map(async (op) => {
-        if (!op.files.length || !op.destination)
-          return { success: false, error: "Missing data" };
-
-        const renameTasks = op.files.map(async (file, index) => {
-          const newName = op.newNames[index];
-          const newPath = `${op.destination}/${newName}`;
-          return await window.electron.renameMoveFile(
-            file.originalPath,
-            newPath
-          );
-        });
-
-        return await Promise.all(renameTasks);
-      })
-    );
-
-    if (allResults.flat().every((res) => res.success)) {
-      alert("All files moved successfully!");
-      setOperations([]);
-    } else {
-      alert("Some files failed to move.");
-    }
   };
 
   return (
@@ -231,25 +225,31 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {op.files.map((file, index) => (
-                      <tr key={index} style={tableRowStyle}>
+                    {op.files.map((file) => (
+                      <tr key={file.originalPath} style={tableRowStyle}>
                         <td style={tableCellStyle}>{file.originalName}</td>
                         <td style={tableCellStyle}>
                           <input
                             type="text"
-                            value={op.newNames[index] || ""}
+                            value={op.newNames[file.originalPath] || ""}
                             onChange={(e) =>
-                              handleNewNameChange(op.id, index, e.target.value)
+                              handleNewNameChange(
+                                op.id,
+                                file.originalPath,
+                                e.target.value
+                              )
                             }
-                            onClick={(e) => handleNameClick(e, op, index)}
+                            onClick={(e) => handleNameClick(e, file)}
                             style={inputStyle}
                           />
                         </td>
                         <td style={tableCellStyle}>
                           {imageExtensions.includes(file.extension) &&
-                            (!op.previewVisibility[index] ? (
+                            (!op.previewVisibility[file.originalPath] ? (
                               <button
-                                onClick={() => togglePreview(op.id, index)}
+                                onClick={() =>
+                                  togglePreview(op.id, file.originalPath)
+                                }
                                 style={buttonStyle}
                               >
                                 Show Preview
@@ -257,7 +257,9 @@ function App() {
                             ) : (
                               <div style={previewContainerStyle}>
                                 <button
-                                  onClick={() => closePreview(op.id, index)}
+                                  onClick={() =>
+                                    closePreview(op.id, file.originalPath)
+                                  }
                                   style={closePreviewButtonStyle}
                                 >
                                   X
@@ -272,11 +274,11 @@ function App() {
                         </td>
                         <td style={tableCellStyle}>
                           <button
-                            onClick={() => removeFile(op.id, index)}
+                            onClick={() => removeFile(op.id, file.originalPath)}
                             style={deleteButtonStyle}
                           >
                             X
-                          </button>{" "}
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -287,19 +289,13 @@ function App() {
           )}
         </div>
       ))}
-
-      {operations.length > 0 && (
-        <button onClick={applyAllOperations} style={applyAllButtonStyle}>
-          ✅ Apply All Rename/Move Operations
-        </button>
-      )}
     </div>
   );
 }
 
 export default App;
 
-/* ✅ ALL STYLES CHECKED AND DEFINED */
+// bunch of hacky styling
 const appStyle = {
   padding: "20px",
   backgroundColor: "#222",
@@ -330,11 +326,6 @@ const tableRowStyle = {
   backgroundColor: "#222",
   borderBottom: "1px solid #555",
 };
-const applyAllButtonStyle = {
-  ...buttonStyle,
-  background: "green",
-  marginTop: "20px",
-};
 const deleteButtonStyle = {
   background: "red",
   color: "white",
@@ -363,17 +354,13 @@ const inputStyle = {
   color: "#fff",
   fontSize: "16px",
   border: "1px solid #555",
-  width: "100%", // Adjust width dynamically if needed
+  width: "100%",
 };
-const previewImageStyle = {
-  width: "400px",
-  height: "400px",
-  objectFit: "cover",
-  marginTop: "10px",
-  borderRadius: "8px",
-  border: "1px solid #555",
+
+const previewContainerStyle = {
+  position: "relative",
+  display: "inline-block",
 };
-const previewContainerStyle = { position: "relative", display: "inline-block" };
 
 const closePreviewButtonStyle = {
   position: "absolute",
@@ -384,4 +371,12 @@ const closePreviewButtonStyle = {
   padding: "5px",
   borderRadius: "5px",
   cursor: "pointer",
+};
+const previewImageStyle = {
+  width: "400px",
+  height: "400px",
+  objectFit: "cover",
+  marginTop: "10px",
+  borderRadius: "8px",
+  border: "1px solid #555",
 };

@@ -1,5 +1,7 @@
 {
   "name": "magos-electron",
+  "description": "An Electron-based batch file mover",
+  "author": "Joe Venton",
   "private": true,
   "version": "0.0.0",
   "type": "module",
